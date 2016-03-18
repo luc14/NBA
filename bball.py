@@ -22,6 +22,8 @@ def import_data(filename):
         
         if event['moments']:       
             for moment in event['moments']:
+                # save info about players and ball at this moment
+                moment_positions = []
                 period, real_time, game_time, shot_time, _, player_records = moment
                 
                 # if this moment is already recorded in another event, skip it
@@ -29,29 +31,39 @@ def import_data(filename):
                     continue
                 else:
                     real_times.add(real_time)  
-                 
-                record_idx = len(positions) -1    
+                
+                ball_absent = True
                 for player_record in player_records: 
-                    record_idx += 1
                     team_id, player_id, x, y, z = player_record
-                    if player_id  == -1:
+                    
+                    moment_positions.append({'player_id': player_id,
+                                             'period': period,
+                                             'game_time': game_time, 
+                                             'x': x, 'y': y, 'z': z, 
+                                             'real_time': real_time})                    
+                    if player_id == -1:
+                        #ball = player_record # ball !!!!!
                         ball_x = x
                         ball_y = y 
                         ball_z = z
                         closest_to_ball = float('inf')
-                    else:
-                        distance_to_ball = ((x - ball_x)**2 + (y - ball_y)**2)**0.5
+                        ball_absent = False
+                
+                if ball_absent is False:
+                    for idx, moment_position in enumerate(moment_positions):
+                        if moment_position['player_id'] == -1:
+                            continue
+                        
+                        distance_to_ball = ((moment_position['x'] - ball_x)**2 + (moment_position['y'] - ball_y)**2)**0.5
                         if distance_to_ball < closest_to_ball:
                             closest_to_ball = distance_to_ball
-                            player_withball_idx = record_idx
-                    
-                    positions.append({'player_id': player_id,
-                                      'period': period,
-                                      'game_time': game_time, 
-                                      'x': x, 'y': y, 'z': z, 
-                                      'real_time': real_time})
-                if closest_to_ball <4:
-                    positions[player_withball_idx]['with_ball'] = True
+                            player_withball_idx = idx 
+                            
+                    if closest_to_ball <4:
+                        moment_positions[player_withball_idx]['with_ball'] = True                                            
+                        
+                positions += moment_positions
+                # moment ends
                     
     position_df = pd.DataFrame(positions)
     position_df.sort_values(['player_id', 'real_time'], inplace = True)
