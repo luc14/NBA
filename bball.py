@@ -1,5 +1,6 @@
 import json
 import pandas as pd
+import datetime
 
 filename0 = '0021500575.json'
 
@@ -8,6 +9,7 @@ def import_data(filename):
     data = json.load(file)
     # dict_keys(['gameid', 'events', 'gamedate'])
     positions = []
+    timeline = []
     real_times = set()
     player_id_name = {}
     for event in data['events']:
@@ -19,6 +21,7 @@ def import_data(filename):
                 player_id = player['playerid']
                 if player_id not in player_id_name:
                     player_id_name[player_id] = name
+        player_id_name[-1] = 'ball'        
         
         if event['moments']:       
             for moment in event['moments']:
@@ -26,11 +29,12 @@ def import_data(filename):
                 moment_positions = []
                 period, real_time, game_time, shot_time, _, player_records = moment
                 
+                #game_time = datetime.timedelta(seconds = game_time)
                 # if this moment is already recorded in another event, skip it
                 if real_time in real_times:
                     continue
-                else:
-                    real_times.add(real_time)  
+                real_times.add(real_time)
+                timeline.append({'real_time': real_time, 'player_id': -1})
                 
                 ball_absent = True
                 for player_record in player_records: 
@@ -49,7 +53,9 @@ def import_data(filename):
                         closest_to_ball = float('inf')
                         ball_absent = False
                 
+                
                 if ball_absent is False:
+                    
                     for idx, moment_position in enumerate(moment_positions):
                         if moment_position['player_id'] == -1:
                             continue
@@ -57,10 +63,12 @@ def import_data(filename):
                         distance_to_ball = ((moment_position['x'] - ball_x)**2 + (moment_position['y'] - ball_y)**2)**0.5
                         if distance_to_ball < closest_to_ball:
                             closest_to_ball = distance_to_ball
-                            player_withball_idx = idx 
+                            player_withball_id = moment_position['player_id']
                             
-                    if closest_to_ball <4:
-                        moment_positions[player_withball_idx]['with_ball'] = True                                            
+                    if closest_to_ball < 4 and ball_z < 7:
+                        #moment_positions[player_withball_idx]['maybe_with_ball'] = True                                            
+                        timeline[-1]['player_id'] = player_withball_id
+
                         
                 positions += moment_positions
                 # moment ends
@@ -76,7 +84,9 @@ def import_data(filename):
     position_df['distance'] = (position_df['x'].diff()**2 +  position_df['y'].diff()**2 +  position_df['z'].diff()**2) ** 0.5
     position_df['speed'] = position_df['distance'] / position_df['time_interval']
     position_df.loc[ ~speed_valid , 'speed'] = None
+    position_df['game_time'] = pd.to_timedelta(position_df['game_time'], unit = 's')
     
+    timeline = pd.DataFrame(timeline)
     # add a column indicating who is holding the ball
     #player_lst = set(position_df['player_id']) - {-1}
     #for player_id in player_lst: 
@@ -85,5 +95,19 @@ def import_data(filename):
         
         #position_df.loc[rows ,'distance_ball']= \
             #((position_df.loc[rows,'x'] - balls['x']) **2 + (position_df.loc[rows,'y'] - balls['y']) **2 ) ** 0.5
-    return position_df, player_id_name
+    
+    
+    # decide who is holding the ball:
+    timeline_possession_start = timeline[timeline['player_id'].shift(1) != timeline['player_id']].copy()
+    timeline_possession_start['hold_time'] = timeline_possession_start['real_time'].diff().shift(-1)
+    timeline = timeline_possession_start[timeline_possession_start['hold_time'] > 500]
+    # might have several identical consecutive records
+    
+    return position_df, player_id_name, timeline
 
+
+def main():
+    speed, player_id_name, timeline = import_data(filename0)
+    
+if __name__ == '__main__':
+    main()
