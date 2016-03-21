@@ -12,16 +12,18 @@ def import_data(filename):
     timeline = []
     real_times = set()
     player_id_name = {}
+    
     for event in data['events']:
         
-        # edit player_id_name
-        for team in ['visitor', 'home']:    
-            for player in event[team]['players']: #player is a dict
-                name = player['firstname'] + ' ' + player['lastname']
-                player_id = player['playerid']
-                if player_id not in player_id_name:
-                    player_id_name[player_id] = name
-        player_id_name[-1] = 'ball'        
+               # edit player_id_name
+        #for team in ['visitor', 'home']: 
+            
+            #for player in event[team]['players']: #player is a dict
+                #name = player['firstname'] + ' ' + player['lastname']
+                #player_id = player['playerid']
+                #if player_id not in player_id_name:
+                    #player_id_name[player_id] = name
+        #player_id_name[-1] = 'ball'        
         
         if event['moments']:       
             for moment in event['moments']:
@@ -81,12 +83,15 @@ def import_data(filename):
         (position_df['player_id'].shift(1) == position_df['player_id'])
     
     position_df['time_interval'] = position_df['real_time'].diff()
+    position_df['game_time'] = pd.to_timedelta(position_df['game_time'], unit = 's')
     position_df['distance'] = (position_df['x'].diff()**2 +  position_df['y'].diff()**2 +  position_df['z'].diff()**2) ** 0.5
     position_df['speed'] = position_df['distance'] / position_df['time_interval']
     position_df.loc[ ~speed_valid , 'speed'] = None
-    position_df['game_time'] = pd.to_timedelta(position_df['game_time'], unit = 's')
+    # switch speed from 1 feet/ ms to 1 m/s
+    position_df['speed'] = position_df['speed'] * 305
+    position_df['speed'] = position_df['speed'].rolling(window=5, center = True).mean()
+    position_df['acceleration'] = (1000*position_df['speed'].diff()/position_df['time_interval']).rolling(window=5, center = True).mean()
     
-    timeline = pd.DataFrame(timeline)
     # add a column indicating who is holding the ball
     #player_lst = set(position_df['player_id']) - {-1}
     #for player_id in player_lst: 
@@ -96,17 +101,38 @@ def import_data(filename):
         #position_df.loc[rows ,'distance_ball']= \
             #((position_df.loc[rows,'x'] - balls['x']) **2 + (position_df.loc[rows,'y'] - balls['y']) **2 ) ** 0.5
     
-    
+    timeline = pd.DataFrame(timeline)
+    timeline.sort_values('real_time', inplace = True)
     # decide who is holding the ball:
     timeline_possession_start = timeline[timeline['player_id'].shift(1) != timeline['player_id']].copy()
     timeline_possession_start['hold_time'] = timeline_possession_start['real_time'].diff().shift(-1)
     timeline = timeline_possession_start[timeline_possession_start['hold_time'] > 500]
     # might have several identical consecutive records
     
-    return position_df, player_id_name, timeline
+    event = data['events'][0]
+    players_info = pd.DataFrame(event['visitor']['players'] + event['home']['players'] + [{'playerid': -1, 'firstname': 'ball'}])
+    players_info.rename(columns= {'playerid': 'player_id'}, inplace =True)
+    players_info['name'] = players_info['firstname'] + ' ' + players_info['lastname']
+    players_info.drop(['firstname', 'lastname'], axis=1, inplace=True)
+    #players_info.ix[-1, 'name'] = 'ball'
+    
+    timeline_possession = pd.merge(timeline, players_info, on= ['player_id'], how = 'left')
+   
+    return position_df, players_info, timeline_possession
 
+def analyze_possession(speed, timeline_possession, timeline_idx, plot = True):
+    player_id = timeline_possession.loc[timeline_idx,'player_id']
+    time_start = timeline_possession.loc[timeline_idx, 'real_time']
+    time_end = time_start + timeline_possession.loc[timeline_idx, 'hold_time']
+    player_speed = speed[(speed['player_id'] == player_id) & (speed['real_time'] >= time_start) & (speed['real_time'] < time_end)]
+    if plot:
+        print(timeline_possession.loc[[timeline_idx]])
+        player_speed.plot(x = 'real_time', y = 'acceleration')
+        player_speed.plot(x = 'real_time', y = 'speed')
+    return player_speed
 
 def main():
+    
     speed, player_id_name, timeline = import_data(filename0)
     
 if __name__ == '__main__':
