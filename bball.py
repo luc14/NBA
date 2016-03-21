@@ -67,7 +67,7 @@ def import_data(filename):
                             closest_to_ball = distance_to_ball
                             player_withball_id = moment_position['player_id']
                             
-                    if closest_to_ball < 4 and ball_z < 7:
+                    if closest_to_ball < 4 and ball_z < 11:
                         #moment_positions[player_withball_idx]['maybe_with_ball'] = True                                            
                         timeline[-1]['player_id'] = player_withball_id
 
@@ -116,7 +116,8 @@ def import_data(filename):
     players_info.drop(['firstname', 'lastname'], axis=1, inplace=True)
     #players_info.ix[-1, 'name'] = 'ball'
     
-    timeline_possession = pd.merge(timeline, players_info, on= ['player_id'], how = 'left')
+    timeline_possession = pd.merge(timeline, players_info, on= ['player_id'], how ='left')
+    timeline_possession = pd.merge(timeline_possession, position_df[['player_id', 'real_time', 'game_time', 'period']], on = ['player_id', 'real_time'], how='left')
    
     return position_df, players_info, timeline_possession
 
