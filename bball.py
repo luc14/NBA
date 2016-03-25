@@ -29,7 +29,7 @@ def import_data(filename):
                 if real_time in real_times:
                     continue
                 real_times.add(real_time)
-                possessions.append({'real_time': real_time, 'player_id': -1})
+                possessions.append({'real_time': real_time, 'game_time': game_time, 'period': period, 'player_id': -1})
                 
                 ball_absent = True
                 for player_record in player_records: 
@@ -74,6 +74,7 @@ def import_data(filename):
         (speed['player_id'].shift(1) == speed['player_id'])
     
     speed['time_interval'] = speed['real_time'].diff()
+    speed['cum_game_time'] = speed['period'].clip(upper=4) * 12 * 60 +  (speed['period'].clip(lower=4) - 4) * 5 * 60  - speed['game_time']
     #speed['game_time'] = pd.to_timedelta(speed['game_time'], unit = 's')
     speed['distance'] = (speed['x'].diff()**2 +  speed['y'].diff()**2 +  speed['z'].diff()**2) ** 0.5
     speed['speed'] = speed['distance'] / speed['time_interval']
@@ -83,14 +84,15 @@ def import_data(filename):
     speed['speed'] = speed['speed'].rolling(window=5, center = True).mean().clip(0, 8)
     speed['acceleration'] = (1000*speed['speed'].diff()/speed['time_interval']).rolling(window=5, center = True).mean().clip(-10, 10)
         
+    # decide who is holding the ball:    
     possessions = pd.DataFrame(possessions)
     possessions.sort_values('real_time', inplace = True)
-    # decide who is holding the ball:
-    timeline_possession_start = possessions[possessions['player_id'].shift(1) != possessions['player_id']].copy()
-    timeline_possession_start['hold_time'] = timeline_possession_start['real_time'].diff().shift(-1)
-    possessions = timeline_possession_start[timeline_possession_start['hold_time'] > 500]
-    # might have several identical consecutive records
-    
+    possessions.loc[possessions['real_time'].diff().shift(-1) > 45, 'player_id'] = -1
+    possessions.loc[possessions['game_time'].diff() >= 0, 'player_id'] = -1
+    possessions = possessions[possessions['player_id'].shift(1) != possessions['player_id']]
+    possessions = possessions[possessions['real_time'].diff().shift(-1)> 500]
+    possessions = possessions[possessions['player_id'].shift(1) != possessions['player_id']] 
+
     event = data['events'][0]
     players = pd.DataFrame(event['visitor']['players'] + event['home']['players'] + [{'playerid': -1, 'firstname': 'ball', 'lastname': ''}])
     players.rename(columns= {'playerid': 'player_id'}, inplace =True)
@@ -107,8 +109,8 @@ def import_data(filename):
     players = players[players['player_id'].isin(players_lst)]
     
     possessions = pd.merge(possessions, players, on= ['player_id'], how ='left')
-    possessions = pd.merge(possessions, speed[['player_id', 'real_time', 'game_time', 'period']], on = ['player_id', 'real_time'], how='left')
-   
+    #speed.drop(['game_time', 'period'], inplace=True)
+    
     return speed, players, possessions, game_id
 
 def analyze_possession(speed, possessions, timeline_idx, plot = True):
@@ -156,7 +158,7 @@ def create_database():
             
             if i == 0:
                 c.execute('CREATE TABLE speed({}, PRIMARY KEY(real_time, player_id, game_id))'.format(','.join(list(speed.columns) + ['game_id'])))
-                
+                c.execute('CREATE TABLE possession({}, PRIMARY KEY(real_time, game_id))'.format(','.join(list(possessions.columns) + ['game_id'])))
             speed['game_id'] = game_id
             speed.to_sql('speed', connection, if_exists='append', index=False)
         except Exception as e:
