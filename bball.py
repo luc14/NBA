@@ -1,6 +1,7 @@
 import json
 import pandas as pd
 import datetime
+import sqlite3, glob, subprocess, os, traceback
 
 filename0 = '0021500575.json'
 
@@ -11,6 +12,8 @@ def import_data(filename):
     positions = []
     possessions = []
     real_times = set()
+    
+    game_id = data['gameid']
     
     for event in data['events']:
          
@@ -71,7 +74,7 @@ def import_data(filename):
         (speed['player_id'].shift(1) == speed['player_id'])
     
     speed['time_interval'] = speed['real_time'].diff()
-    speed['game_time'] = pd.to_timedelta(speed['game_time'], unit = 's')
+    #speed['game_time'] = pd.to_timedelta(speed['game_time'], unit = 's')
     speed['distance'] = (speed['x'].diff()**2 +  speed['y'].diff()**2 +  speed['z'].diff()**2) ** 0.5
     speed['speed'] = speed['distance'] / speed['time_interval']
     speed.loc[ ~speed_valid , ['speed', 'distance']] = None
@@ -89,16 +92,24 @@ def import_data(filename):
     # might have several identical consecutive records
     
     event = data['events'][0]
-    players = pd.DataFrame(event['visitor']['players'] + event['home']['players'] + [{'playerid': -1, 'firstname': 'ball'}])
+    players = pd.DataFrame(event['visitor']['players'] + event['home']['players'] + [{'playerid': -1, 'firstname': 'ball', 'lastname': ''}])
     players.rename(columns= {'playerid': 'player_id'}, inplace =True)
     players['name'] = players['firstname'] + ' ' + players['lastname']
     players.drop(['firstname', 'lastname'], axis=1, inplace=True)
     #players.ix[-1, 'name'] = 'ball'
     
+    speed = speed[speed['player_id'] != -1]
+    #speed.loc[:, 'real_time'] = speed['real_time'] - speed['real_time'].min()
+    speed['real_time'] -= speed['real_time'].min()
+    
+    
+    players_lst = set(speed['player_id']) 
+    players = players[players['player_id'].isin(players_lst)]
+    
     possessions = pd.merge(possessions, players, on= ['player_id'], how ='left')
     possessions = pd.merge(possessions, speed[['player_id', 'real_time', 'game_time', 'period']], on = ['player_id', 'real_time'], how='left')
    
-    return speed[speed['player_id'] != -1], players, possessions
+    return speed, players, possessions, game_id
 
 def analyze_possession(speed, possessions, timeline_idx, plot = True):
     player_id = possessions.loc[timeline_idx,'player_id']
@@ -112,8 +123,49 @@ def analyze_possession(speed, possessions, timeline_idx, plot = True):
     return player_speed
 
 def main():
+    #speed, players, possessions = import_data(filename0)
+    create_database()
     
-    speed, players, possessions = import_data(filename0)
+def create_database():
+    connection = sqlite3.connect('basketball')
+    all_players = pd.DataFrame()
+    c = connection.cursor()
+    decompress_folder = './decompress/'
+    try:
+        os.mkdir(decompress_folder)
+    except:
+        pass
+    try:
+        c.execute('DROP TABLE players')
+        c.execute('DROP TABLE speed')
+    except:
+        pass
+    c.execute('CREATE TABLE players (player_id, name, PRIMARY KEY(player_id))')     
     
+    #c.execute('CREATE TABLE players (player_id, player_name, jersey, team)')
+    #c.execute('INSERT INTO players VALUES (?, ?, ?, ?)', (player_id, player_name, jersey, team) )
+    for i, compressed_filename in enumerate(glob.glob( '*.7z')):
+        try:
+            for old_file in glob.glob(decompress_folder + '*.json'):
+                os.remove(old_file)
+            subprocess.run(['./unar', compressed_filename, '-o', 'decompress'])
+            game_filename = glob.glob('./decompress/*.json')[0]
+            speed, players, possessions, game_id = import_data(game_filename)
+            all_players = pd.concat([all_players, players[['player_id', 'name']]], ignore_index=True, axis = 0)
+            all_players.drop_duplicates(inplace=True)
+            
+            if i == 0:
+                c.execute('CREATE TABLE speed({}, PRIMARY KEY(real_time, player_id, game_id))'.format(','.join(list(speed.columns) + ['game_id'])))
+                
+            speed['game_id'] = game_id
+            speed.to_sql('speed', connection, if_exists='append', index=False)
+        except Exception as e:
+            print(traceback.format_exc(), file=open('report.txt', 'a'))
+            print(compressed_filename, game_filename, file=open('report.txt', 'a'))
+    
+    all_players.to_sql('players', connection, if_exists='append', index=False)
+        
 if __name__ == '__main__':
     main()
+    
+    
