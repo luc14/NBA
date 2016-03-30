@@ -1,7 +1,7 @@
 import json
 import pandas as pd
 import datetime
-import sqlite3, glob, subprocess, os, traceback
+import sqlite3, glob, subprocess, os, traceback, platform
 
 filename0 = '0021500575.json'
 
@@ -92,6 +92,7 @@ def import_data(filename):
     possessions = possessions[possessions['player_id'].shift(1) != possessions['player_id']]
     possessions = possessions[possessions['real_time'].diff().shift(-1)> 500]
     possessions = possessions[possessions['player_id'].shift(1) != possessions['player_id']] 
+    possessions['real_time'] -= possessions['real_time'].min()
 
     event = data['events'][0]
     players = pd.DataFrame(event['visitor']['players'] + event['home']['players'] + [{'playerid': -1, 'firstname': 'ball', 'lastname': ''}])
@@ -109,7 +110,7 @@ def import_data(filename):
     players = players[players['player_id'].isin(players_lst)]
     
     possessions = pd.merge(possessions, players, on= ['player_id'], how ='left')
-    #speed.drop(['game_time', 'period'], inplace=True)
+    speed.drop(['game_time', 'period'], inplace=True, axis=1)
     
     return speed, players, possessions, game_id
 
@@ -117,56 +118,105 @@ def analyze_possession(speed, possessions, timeline_idx, plot = True):
     player_id = possessions.loc[timeline_idx,'player_id']
     time_start = possessions.loc[timeline_idx, 'real_time']
     time_end = time_start + possessions.loc[timeline_idx, 'hold_time']
-    player_speed = speed[(speed['player_id'] == player_id) & (speed['real_time'] >= time_start) & (speed['real_time'] < time_end)]
+    player_spatial = speed[(speed['player_id'] == player_id) & (speed['real_time'] >= time_start) & (speed['real_time'] < time_end)]
     if plot:
         print(possessions.loc[[timeline_idx]])
-        player_speed.plot(x = 'real_time', y = 'acceleration')
-        player_speed.plot(x = 'real_time', y = 'speed')
-    return player_speed
+        player_spatial.plot(x = 'real_time', y = 'acceleration')
+        player_spatial.plot(x = 'real_time', y = 'speed')
+    return player_spatial
 
 def main():
-    #speed, players, possessions = import_data(filename0)
-    create_database()
+    if platform.system() == 'Windows':
+        unar_filename = 'unar.exe'
+        basketball_folder = '../../../../Downloads/basketball/'
+    elif platform.system() == 'Linux':
+        unar_filename = 'unar'
+        basketball_folder = '../../../../Downloads/basketball/'
+        sportvu_folder = '/media/shoya/Data/bball/BasketballData-master/BasketballData-master/2016.NBA.Raw.SportVU.Game.Logs/'
+    else:
+        unar_filename = './unar'
+        basketball_folder = '/Users/lency/Documents/basketball/'
+        sportvu_folder = './'
+        
+    db_filename = basketball_folder + 'basketball.sqlite'
+    decompress_folder = basketball_folder + 'decompress/'  
+
+    #create_database(db_filename)
+    downsample_spatial(db_filename, 1)
     
-def create_database():
-    connection = sqlite3.connect('basketball')
+
+
+def create_table(cursor, table_name, column_lst, pk_lst):
+    cursor.execute('CREATE TABLE {}({}, PRIMARY KEY({}))'.format(table_name, ','.join(column_lst), ','.join(pk_lst)))
+
+def create_database(filename):
+    connection = sqlite3.connect(filename)
     all_players = pd.DataFrame()
     c = connection.cursor()
-    decompress_folder = './decompress/'
     try:
         os.mkdir(decompress_folder)
     except:
         pass
     try:
         c.execute('DROP TABLE players')
-        c.execute('DROP TABLE speed')
+        c.execute('DROP TABLE spatial')
+        c.execute('DROP TABLE possessions')
     except:
         pass
-    c.execute('CREATE TABLE players (player_id, name, PRIMARY KEY(player_id))')     
+    create_table(c, 'players', column_lst=['player_id', 'name'], pk_lst=['player_id'])
     
     #c.execute('CREATE TABLE players (player_id, player_name, jersey, team)')
     #c.execute('INSERT INTO players VALUES (?, ?, ?, ?)', (player_id, player_name, jersey, team) )
-    for i, compressed_filename in enumerate(glob.glob( '*.7z')):
+    for i, compressed_filename in enumerate(glob.glob(sportvu_folder + '*.7z')):
         try:
             for old_file in glob.glob(decompress_folder + '*.json'):
                 os.remove(old_file)
-            subprocess.run(['./unar', compressed_filename, '-o', 'decompress'])
-            game_filename = glob.glob('./decompress/*.json')[0]
-            speed, players, possessions, game_id = import_data(game_filename)
+            subprocess.run([unar_filename, compressed_filename, '-o', decompress_folder])
+            game_filename = glob.glob(decompress_folder + '*.json')[0]
+            spatial, players, possessions, game_id = import_data(game_filename)
             all_players = pd.concat([all_players, players[['player_id', 'name']]], ignore_index=True, axis = 0)
             all_players.drop_duplicates(inplace=True)
-            
+            spatial['game_id'] = game_id
+            possessions['game_id'] = game_id
             if i == 0:
-                c.execute('CREATE TABLE speed({}, PRIMARY KEY(real_time, player_id, game_id))'.format(','.join(list(speed.columns) + ['game_id'])))
-                c.execute('CREATE TABLE possession({}, PRIMARY KEY(real_time, game_id))'.format(','.join(list(possessions.columns) + ['game_id'])))
-            speed['game_id'] = game_id
-            speed.to_sql('speed', connection, if_exists='append', index=False)
+                create_table(c, 'spatial',pk_lst=['real_time', 'player_id', 'game_id'], column_lst=spatial.columns)
+                create_table(c, 'possessions', pk_lst=['real_time', 'game_id'], column_lst=possessions.columns)
+           
+            possessions.to_sql('possessions', connection, if_exists='append', index=False)           
+            spatial.to_sql('spatial', connection, if_exists='append', index=False)
         except Exception as e:
             print(traceback.format_exc(), file=open('report.txt', 'a'))
-            print(compressed_filename, game_filename, file=open('report.txt', 'a'))
-    
+            print(compressed_filename, file=open('report.txt', 'a'))
     all_players.to_sql('players', connection, if_exists='append', index=False)
+    for old_file in glob.glob(decompress_folder + '*.json'):
+        os.remove(old_file)    
+
+def downsample_spatial(filename, game_time_interval):
+    connection = sqlite3.connect(filename)
+    player_ids = pd.read_sql('SELECT player_id FROM players', connection)
+    downsampled_spatial = pd.DataFrame()
+    for player_id in player_ids['player_id']:
+        player_spatial = pd.read_sql(
+            'SELECT game_id, cum_game_time, speed, real_time FROM spatial WHERE player_id = ?',
+            params=[int(player_id)],
+            con=connection)
+        player_spatial['game_id'] = player_spatial['game_id'].astype(int)
+        player_spatial['downsampled_game_time'] = (player_spatial['cum_game_time']/game_time_interval).round(0)*game_time_interval
+        player_downsampled_spatial = player_spatial.groupby(['game_id', 'downsampled_game_time']).agg({'speed': 'mean', 'real_time': 'last'}).reset_index()
+        player_downsampled_spatial['player_id'] = player_id
+        game_group = player_downsampled_spatial.groupby('game_id')
         
+        player_downsampled_spatial['time_in_game'] = game_group.cumcount() * game_time_interval
+        player_downsampled_spatial['rest_time'] = game_group['real_time'].diff().cumsum()/1000 - player_downsampled_spatial['time_in_game']
+        
+        s = (player_downsampled_spatial['rest_time'].diff() > 1).groupby(player_downsampled_spatial['game_id']).cumsum()
+        player_downsampled_spatial['time_after_break'] = s.groupby(s).cumcount()
+
+        downsampled_spatial = pd.concat([player_downsampled_spatial, downsampled_spatial], axis=0)
+    downsampled_spatial.to_sql('downsampled_spatial', connection, if_exists='replace', index=False)
+
+
+
 if __name__ == '__main__':
     main()
     
