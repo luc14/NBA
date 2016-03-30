@@ -1,7 +1,7 @@
 import json
 import pandas as pd
 import datetime
-import sqlite3, glob, subprocess, os, traceback, platform
+import sqlite3, glob, subprocess, os, traceback, platform, argparse
 
 filename0 = '0021500575.json'
 
@@ -13,7 +13,7 @@ def import_data(filename):
     possessions = []
     real_times = set()
     
-    game_id = data['gameid']
+    game_id = int(data['gameid'])
     
     for event in data['events']:
          
@@ -125,29 +125,51 @@ def analyze_possession(speed, possessions, timeline_idx, plot = True):
         player_spatial.plot(x = 'real_time', y = 'speed')
     return player_spatial
 
+if platform.system() == 'Windows':
+    unar_filename = 'unar.exe'
+    basketball_folder = '../../../../Downloads/bball/'
+    sportvu_folder = '../../../../Downloads/bball/BasketballData-master/BasketballData-master/2016.NBA.Raw.SportVU.Game.Logs/'
+    #sportvu_folder = './'
+elif platform.system() == 'Linux':
+    unar_filename = 'unar'
+    basketball_folder = '/home/shoya/Downloads/basketball/'
+    sportvu_folder = '/media/shoya/Data/bball/BasketballData-master/BasketballData-master/2016.NBA.Raw.SportVU.Game.Logs/'
+else:
+    unar_filename = './unar'
+    basketball_folder = '/Users/lency/Documents/basketball/'
+    sportvu_folder = './'
+
+db_filename = basketball_folder + 'basketball.sqlite'
+decompress_folder = basketball_folder + 'decompress/'  
+
+
 def main():
-    if platform.system() == 'Windows':
-        unar_filename = 'unar.exe'
-        basketball_folder = '../../../../Downloads/basketball/'
-    elif platform.system() == 'Linux':
-        unar_filename = 'unar'
-        basketball_folder = '../../../../Downloads/basketball/'
-        sportvu_folder = '/media/shoya/Data/bball/BasketballData-master/BasketballData-master/2016.NBA.Raw.SportVU.Game.Logs/'
-    else:
-        unar_filename = './unar'
-        basketball_folder = '/Users/lency/Documents/basketball/'
-        sportvu_folder = './'
-        
-    db_filename = basketball_folder + 'basketball.sqlite'
-    decompress_folder = basketball_folder + 'decompress/'  
-
-    #create_database(db_filename)
-    downsample_spatial(db_filename, 1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--create_database', action='store_true')
+    parser.add_argument('--downsample', type=float)
+    parser.add_argument('--create_index', nargs='*')
+    args = parser.parse_args()
+    if args.create_database:
+        create_database(db_filename)
+    if args.downsample is not None:
+        downsample_spatial(db_filename, args.downsample)
     
+    if args.create_index is not None:
+        table_name, *column_lst = args.create_index
+        create_index(db_filename, table_name, column_lst)
+        
+def create_table(db_filename, table_name, column_lst, pk_lst):
+    connection = sqlite3.connect(filename)
+    c = connection.cursor()    
+    c.execute('CREATE TABLE {}({}, PRIMARY KEY({}))'.format(table_name, ','.join(column_lst), ','.join(pk_lst)))
 
-
-def create_table(cursor, table_name, column_lst, pk_lst):
-    cursor.execute('CREATE TABLE {}({}, PRIMARY KEY({}))'.format(table_name, ','.join(column_lst), ','.join(pk_lst)))
+def create_index(filename, table_name, column_lst):  
+    connection = sqlite3.connect(filename)
+    c = connection.cursor()
+    index_name = table_name + '_' + '_'.join(column_lst)
+    sql_str = 'CREATE INDEX {} ON {} ({})'.format( index_name, table_name, ','.join(column_lst))
+    print('Adding index using SQL:', sql_str)
+    c.execute(sql_str)
 
 def create_database(filename):
     connection = sqlite3.connect(filename)
@@ -163,7 +185,7 @@ def create_database(filename):
         c.execute('DROP TABLE possessions')
     except:
         pass
-    create_table(c, 'players', column_lst=['player_id', 'name'], pk_lst=['player_id'])
+    #create_table(c, 'players', column_lst=['player_id', 'name'], pk_lst=['player_id'])
     
     #c.execute('CREATE TABLE players (player_id, player_name, jersey, team)')
     #c.execute('INSERT INTO players VALUES (?, ?, ?, ?)', (player_id, player_name, jersey, team) )
@@ -178,15 +200,14 @@ def create_database(filename):
             all_players.drop_duplicates(inplace=True)
             spatial['game_id'] = game_id
             possessions['game_id'] = game_id
-            if i == 0:
-                create_table(c, 'spatial',pk_lst=['real_time', 'player_id', 'game_id'], column_lst=spatial.columns)
-                create_table(c, 'possessions', pk_lst=['real_time', 'game_id'], column_lst=possessions.columns)
+            #if i == 0:
+                #create_table(c, 'spatial',pk_lst=['real_time', 'player_id', 'game_id'], column_lst=spatial.columns)
+                #create_table(c, 'possessions', pk_lst=['real_time', 'game_id'], column_lst=possessions.columns)
            
             possessions.to_sql('possessions', connection, if_exists='append', index=False)           
             spatial.to_sql('spatial', connection, if_exists='append', index=False)
         except Exception as e:
-            print(traceback.format_exc(), file=open('report.txt', 'a'))
-            print(compressed_filename, file=open('report.txt', 'a'))
+            print(compressed_filename, traceback.format_exc(), file=open('report.txt', 'a'))
     all_players.to_sql('players', connection, if_exists='append', index=False)
     for old_file in glob.glob(decompress_folder + '*.json'):
         os.remove(old_file)    
@@ -213,7 +234,8 @@ def downsample_spatial(filename, game_time_interval):
         player_downsampled_spatial['time_after_break'] = s.groupby(s).cumcount()
 
         downsampled_spatial = pd.concat([player_downsampled_spatial, downsampled_spatial], axis=0)
-    downsampled_spatial.to_sql('downsampled_spatial', connection, if_exists='replace', index=False)
+        print('processed', player_id, flush=True)
+    downsampled_spatial.to_sql('downsampled_spatial_' + str(game_time_interval).replace('.', '_'), connection, if_exists='replace', index=False)
 
 
 
