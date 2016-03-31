@@ -229,10 +229,13 @@ def downsample_spatial(filename, game_time_interval):
         
         player_downsampled_spatial['time_in_game'] = game_group.cumcount() * game_time_interval
         player_downsampled_spatial['rest_time'] = game_group['real_time'].diff().cumsum()/1000 - player_downsampled_spatial['time_in_game']
+        player_downsampled_spatial['rest_time'].fillna(0,inplace = True)
         
-        s = (player_downsampled_spatial['rest_time'].diff() > 1).groupby(player_downsampled_spatial['game_id']).cumsum()
+        # reset time_after_break to 0 after break
+        s = (player_downsampled_spatial['rest_time'].diff() > 60).groupby(player_downsampled_spatial['game_id']).cumsum()
         player_downsampled_spatial['time_after_break'] = s.groupby(s).cumcount()
-
+        
+        
         downsampled_spatial = pd.concat([player_downsampled_spatial, downsampled_spatial], axis=0)
         print('processed', player_id, flush=True)
     downsampled_spatial.to_sql('downsampled_spatial_' + str(game_time_interval).replace('.', '_'), connection, if_exists='replace', index=False)
