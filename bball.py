@@ -92,6 +92,7 @@ def import_data(filename):
     possessions = possessions[possessions['player_id'].shift(1) != possessions['player_id']]
     possessions = possessions[possessions['real_time'].diff().shift(-1)> 500]
     possessions = possessions[possessions['player_id'].shift(1) != possessions['player_id']] 
+    # shift the real_time to start from 0s for each game (refers to a specific time point)
     possessions['real_time'] -= possessions['real_time'].min()
 
     event = data['events'][0]
@@ -132,7 +133,8 @@ if platform.system() == 'Windows':
     #sportvu_folder = './'
 elif platform.system() == 'Linux':
     unar_filename = 'unar'
-    basketball_folder = '/home/shoya/Downloads/basketball/'
+    #basketball_folder = '/home/shoya/Downloads/basketball/'
+    basketball_folder = '/media/shoya/Data/bball/'
     sportvu_folder = '/media/shoya/Data/bball/BasketballData-master/BasketballData-master/2016.NBA.Raw.SportVU.Game.Logs/'
 else:
     unar_filename = './unar'
@@ -151,12 +153,14 @@ def main():
     args = parser.parse_args()
     if args.create_database:
         create_database(db_filename)
-    if args.downsample is not None:
-        downsample_spatial(db_filename, args.downsample)
-    
+        
     if args.create_index is not None:
         table_name, *column_lst = args.create_index
         create_index(db_filename, table_name, column_lst)
+        
+    if args.downsample is not None:
+        downsample_spatial(db_filename, args.downsample)
+    
         
 def create_table(db_filename, table_name, column_lst, pk_lst):
     connection = sqlite3.connect(filename)
@@ -244,5 +248,4 @@ def downsample_spatial(filename, game_time_interval):
 
 if __name__ == '__main__':
     main()
-    
     
